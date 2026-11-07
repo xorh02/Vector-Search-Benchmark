@@ -255,6 +255,7 @@ Validation runs before anything touches the database. These are the errors you a
 | `dimensions` > 2000 | HNSW on the `vector` type supports at most 2000 dimensions. |
 | `cosine metric requires non-zero vectors` | Cosine distance is undefined for zero vectors. |
 | Unknown keys or bad values | The file is rejected with the offending field named. |
+| `HNSW index build ran out of shared memory` | Parallel index builds use about `maintenance_work_mem` of shared memory. Docker containers get only 64 MB by default. Start the container with `--shm-size=1g` (the bundled Compose file already does), or lower `maintenance_work_mem`. |
 
 The database URL comes from `--database-url`, then `$VSBENCH_DATABASE_URL`, then `postgresql://vsbench:vsbench@127.0.0.1:5433/vsbench`, which matches the Compose file. The URL is never written to any output. Compose reads `POSTGRES_USER`, `POSTGRES_PASSWORD`, `POSTGRES_DB` and `VSBENCH_DB_PORT` if you want different local settings.
 

@@ -147,7 +147,15 @@ def create_hnsw_index(
         sql.Literal(ef_construction),
     )
     start = time.perf_counter_ns()
-    conn.execute(stmt)
+    try:
+        conn.execute(stmt)
+    except psycopg.errors.DiskFull as e:
+        # Parallel builds allocate ~maintenance_work_mem of shared memory (/dev/shm in Docker).
+        raise DatabaseError(
+            f"HNSW index build ran out of shared memory: {str(e).strip()}\n"
+            "Give the server more shared memory (docker --shm-size=1g, or shm_size in Compose), "
+            "or lower maintenance_work_mem in the benchmark config."
+        ) from e
     elapsed = (time.perf_counter_ns() - start) / 1e9
     conn.execute("RESET maintenance_work_mem")
     return elapsed

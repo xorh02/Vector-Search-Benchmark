@@ -1,6 +1,7 @@
 """Database helpers that do not need a server."""
 
 import numpy as np
+import psycopg
 import pytest
 
 from vsbench import db
@@ -46,3 +47,17 @@ def test_drop_table_refuses_unprefixed_names():
 def test_operators():
     assert db.OPERATORS[Metric.COSINE] == "<=>"
     assert db.OPERATORS[Metric.EUCLIDEAN] == "<->"
+
+
+def test_index_build_shared_memory_error_is_actionable():
+    # A container with a small /dev/shm fails parallel HNSW builds with DiskFull.
+    class FakeConn:
+        calls = 0
+
+        def execute(self, *args):
+            self.calls += 1
+            if self.calls == 2:  # 1: SET maintenance_work_mem, 2: CREATE INDEX
+                raise psycopg.errors.DiskFull("could not resize shared memory segment")
+
+    with pytest.raises(db.DatabaseError, match="shm-size"):
+        db.create_hnsw_index(FakeConn(), "vsbench_t", "vsbench_t_hnsw", Metric.COSINE, 8, 32, "1GB")  # type: ignore[arg-type]

@@ -5,6 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Annotated
 
+import psycopg
 import typer
 
 from vsbench import __version__, benchmark, db, report
@@ -111,6 +112,8 @@ def run(
         )
     except (ConfigError, db.DatabaseError, ValueError) as e:
         raise _fail(str(e)) from None
+    except psycopg.Error as e:
+        raise _fail(f"PostgreSQL error: {str(e).strip()}") from None
     paths = report.write_outputs(result, out)
     for r in result.results:
         typer.echo(
