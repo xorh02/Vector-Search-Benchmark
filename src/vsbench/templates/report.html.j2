@@ -1,0 +1,219 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Vector Search Bench report</title>
+<style>
+:root {
+  color-scheme: light;
+  --bg: #f6f6f4; --surface: #fcfcfb; --border: #e3e2de;
+  --text: #0b0b0b; --text-2: #52514e; --muted: #807f7a;
+  --grid: #ebeae6; --s1: #2a78d6; --s2: #eb6834; --s3: #1baf7a; --s4: #6250d6; --s5: #e87ba4; --other: #9a9994;
+  --ok: #157f3b; --bad: #b42318;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+    --bg: #111110; --surface: #1a1a19; --border: #2e2e2c;
+    --text: #f0efec; --text-2: #c3c2b7; --muted: #8f8e88;
+    --grid: #2a2a28; --s1: #3987e5; --s2: #d95926; --s3: #199e70; --s4: #9085e9; --s5: #d55181; --other: #6f6e69;
+    --ok: #4cc776; --bad: #f2756a;
+  }
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--text);
+  font: 14px/1.5 ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+main { max-width: 1240px; margin: 0 auto; padding: 32px 16px 64px; }
+h1 { font-size: 24px; margin: 0 0 4px; letter-spacing: -0.01em; }
+h2 { font-size: 16px; margin: 36px 0 12px; }
+p, li { color: var(--text-2); }
+.sub { color: var(--muted); margin: 0 0 24px; }
+code, .mono { font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 12.5px; }
+.card { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 16px; }
+.tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 12px; }
+.tile .k { color: var(--muted); font-size: 12px; }
+.tile .v { font-size: 22px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.tile .n { color: var(--muted); font-size: 12px; }
+.two { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+@media (max-width: 720px) { .two { grid-template-columns: 1fr; } }
+.scroll { overflow-x: auto; }
+table { border-collapse: collapse; width: 100%; font-size: 13px; font-variant-numeric: tabular-nums; }
+th, td { text-align: right; padding: 6px 8px; border-bottom: 1px solid var(--border); white-space: nowrap; }
+th { color: var(--muted); font-weight: 500; font-size: 12px; }
+th:first-child, td:first-child { text-align: left; }
+dl { display: grid; grid-template-columns: max-content 1fr; gap: 4px 16px; margin: 0; }
+dt { color: var(--muted); } dd { margin: 0; overflow-wrap: anywhere; }
+.chart { width: 100%; height: auto; display: block; }
+.chart .grid { stroke: var(--grid); stroke-width: 1; }
+.chart .tick { fill: var(--muted); font-size: 11px; }
+.chart .label { fill: var(--text-2); font-size: 12px; font-family: ui-monospace, Consolas, monospace; }
+.chart .value { fill: var(--text-2); font-size: 11px; }
+.chart rect.s1, .chart .dot.s1 { fill: var(--s1); }
+.chart rect.s2, .chart .dot.s2 { fill: var(--s2); }
+.chart .dot { stroke: var(--surface); stroke-width: 2; }
+.chart .dot.s3 { fill: var(--s3); } .chart .dot.s4 { fill: var(--s4); }
+.chart .dot.s5 { fill: var(--s5); } .chart .dot.other { fill: var(--other); }
+.chart .line { fill: none; stroke-width: 2; }
+.chart .line.s1 { stroke: var(--s1); } .chart .line.s3 { stroke: var(--s3); }
+.chart .line.s4 { stroke: var(--s4); } .chart .line.s5 { stroke: var(--s5); }
+.chart .line.other { stroke: var(--other); }
+.legend { display: flex; flex-wrap: wrap; gap: 6px 16px; color: var(--text-2); font-size: 12px; margin-bottom: 8px; }
+.sw { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 6px; vertical-align: -1px; }
+.ok { color: var(--ok); } .bad { color: var(--bad); font-weight: 600; }
+.warn { border-left: 3px solid var(--bad); }
+</style>
+</head>
+<body>
+<main>
+{% set cfg = run.config %}
+{% set srv = run.environment.server %}
+{% set server_n = run.results[0].server_samples if run.results else 0 %}
+<h1>Vector Search Bench</h1>
+<p class="sub">Exact vs HNSW search on PostgreSQL {{ srv.postgres_version }} / pgvector {{ srv.pgvector_version }}
+ · {{ run.dataset.size | int | thousands }} {{ "synthetic " if run.dataset.source.startswith("synthetic") }}vectors × {{ run.dataset.dimensions }} dims
+ · {{ cfg.metric }} distance · top-{{ cfg.top_k }} · run {{ run.started_at }}</p>
+
+{% if not run.results %}
+<div class="card warn"><p>This results file contains no measurements.</p></div>
+{% else %}
+
+{% set unverified = run.results | rejectattr("plan_verified") | list %}
+{% if unverified %}
+<div class="card warn"><p class="bad">Query-plan check failed for: {{ unverified | map(attribute="label") | join(", ") }}.
+These timings do not measure the intended access path — see “Query-plan verification”.</p></div>
+{% endif %}
+
+<div class="tiles">
+  {% if exact %}
+  <div class="card tile"><div class="k">Exact median latency</div>
+    <div class="v">{{ "%.2f" | format(exact.latency.median_ms) }} ms</div>
+    <div class="n">p95 {{ "%.2f" | format(exact.latency.p95_ms) }} ms · sequential scan</div></div>
+  {% endif %}
+  {% if hnsw %}
+  {% set hmed = hnsw | map(attribute="latency.median_ms") | list %}
+  {% set hrec = hnsw | map(attribute="recall_mean") | list %}
+  <div class="card tile"><div class="k">HNSW median latency</div>
+    <div class="v">{{ "%.2f" | format(hmed | min) }}{% if hnsw | length > 1 %}–{{ "%.2f" | format(hmed | max) }}{% endif %} ms</div>
+    <div class="n">across {{ hnsw | length }} configuration{{ "s" if hnsw | length > 1 }}</div></div>
+  <div class="card tile"><div class="k">HNSW Recall@{{ cfg.top_k }} (mean)</div>
+    <div class="v">{{ "%.3f" | format(hrec | min) }}{% if hnsw | length > 1 %}–{{ "%.3f" | format(hrec | max) }}{% endif %}</div>
+    <div class="n">vs exact ground truth</div></div>
+  <div class="card tile"><div class="k">HNSW index build</div>
+    <div class="v">{{ "%.2f" | format(hnsw[0].index_build_seconds) }} s</div>
+    <div class="n">m={{ hnsw[0].m }}, ef_construction={{ hnsw[0].ef_construction }}</div></div>
+  <div class="card tile"><div class="k">HNSW index size</div>
+    <div class="v">{{ hnsw[0].index_size_bytes | mib }}</div>
+    <div class="n">table (heap + TOAST) {{ run.table_size_bytes | mib }}</div></div>
+  {% endif %}
+</div>
+
+<h2>Results</h2>
+<div class="card scroll">
+<table>
+  <thead><tr><th>Configuration</th><th>Recall@{{ cfg.top_k }} mean</th><th>Recall min</th>
+    <th>mean ms</th><th>median ms</th><th>p95 ms</th><th>p99 ms</th><th>min ms</th><th>max ms</th>
+    <th>server ms</th><th>QPS</th><th>build s</th><th>index size</th><th>plan ok</th></tr></thead>
+  <tbody>
+  {% for r in run.results %}
+  <tr><td class="mono">{{ r.label }}</td>
+    <td>{{ "%.4f" | format(r.recall_mean) }}</td><td>{{ "%.2f" | format(r.recall_min) }}</td>
+    <td>{{ "%.3f" | format(r.latency.mean_ms) }}</td><td>{{ "%.3f" | format(r.latency.median_ms) }}</td>
+    <td>{{ "%.3f" | format(r.latency.p95_ms) }}</td><td>{{ "%.3f" | format(r.latency.p99_ms) }}</td>
+    <td>{{ "%.3f" | format(r.latency.min_ms) }}</td><td>{{ "%.3f" | format(r.latency.max_ms) }}</td>
+    <td>{{ "%.3f" | format(r.server_median_ms) if r.server_median_ms is not none else "—" }}</td>
+    <td>{{ "%.0f" | format(r.latency.throughput_qps) }}</td>
+    <td>{{ "%.2f" | format(r.index_build_seconds) if r.index_build_seconds is not none else "—" }}</td>
+    <td>{{ r.index_size_bytes | mib if r.index_size_bytes is not none else "—" }}</td>
+    <td>{% if r.plan_verified %}<span class="ok" title="verified">✓</span>{% else %}<span class="bad" title="unexpected plan">✗</span>{% endif %}</td></tr>
+  {% endfor %}
+  </tbody>
+</table>
+</div>
+<p>Latency is client-observed per query (execute + fetch over one connection), {{ run.results[0].latency.samples }} samples per row
+({{ run.dataset.queries }} queries × {{ cfg.trials }} trials). <b>server ms</b> is the median PostgreSQL execution time from <code>EXPLAIN ANALYZE</code> over the first {{ server_n }} queries; the gap to the client median is network, protocol and driver overhead. QPS is sequential single-connection throughput, not server capacity.</p>
+
+<h2>Latency by configuration</h2>
+<div class="card">
+  <div class="legend"><span><i class="sw" style="background:var(--s1)"></i>median</span>
+    <span><i class="sw" style="background:var(--s2)"></i>p95 (value labelled, ms)</span></div>
+  {{ latency_svg }}
+</div>
+
+{% if recall_svg %}
+<h2>Recall vs latency</h2>
+<div class="card">
+  <div class="legend">{% for label, cls in builds %}<span><i class="sw" style="background:var(--{{ cls }})"></i>{{ label }}</span>{% endfor %}
+    <span><i class="sw" style="background:var(--s2)"></i>exact</span></div>
+  {{ recall_svg }}
+</div>
+{% endif %}
+{% endif %}
+
+<h2>Configuration and environment</h2>
+<div class="two">
+  <div class="card"><dl>
+    <dt>Dataset</dt><dd>{{ run.dataset.size }} × {{ run.dataset.dimensions }}, {{ run.dataset.queries }} queries{% if run.dataset.seed is not none %}, seed {{ run.dataset.seed }}{% endif %}</dd>
+    <dt>Source</dt><dd>{{ run.dataset.source }} (NumPy {{ run.dataset.numpy_version }})</dd>
+    <dt>Data SHA-256</dt><dd class="mono">{{ run.dataset.sha256[:16] }}…</dd>
+    <dt>Metric</dt><dd>{{ cfg.metric }} ({{ "<=>" if cfg.metric == "cosine" else "<->" }})</dd>
+    <dt>top_k</dt><dd>{{ cfg.top_k }}</dd>
+    <dt>Warm-up / trials</dt><dd>{{ cfg.warmup_queries }} queries / {{ cfg.trials }}</dd>
+    <dt>HNSW builds</dt><dd>{% for h in cfg.hnsw %}m={{ h.m }}, ef_construction={{ h.ef_construction }}, ef_search={{ h.ef_search | join("/") }}<br>{% endfor %}</dd>
+    <dt>maintenance_work_mem</dt><dd>{{ cfg.maintenance_work_mem }}</dd>
+    <dt>Load time</dt><dd>{{ "%.2f" | format(run.load_seconds) }} s (COPY + VACUUM ANALYZE, {{ run.table_rows }} rows)</dd>
+    <dt>Exact cross-check</dt><dd>{{ run.exact_crosscheck.matching }}/{{ run.exact_crosscheck.queries_checked }} queries match NumPy brute force</dd>
+  </dl></div>
+  <div class="card"><dl>
+    <dt>PostgreSQL</dt><dd>{{ srv.postgres_version_full }}</dd>
+    <dt>pgvector</dt><dd>{{ srv.pgvector_version }}</dd>
+    <dt>Server settings</dt><dd>shared_buffers {{ srv.shared_buffers }}, work_mem {{ srv.work_mem }}, parallel workers/gather {{ srv.max_parallel_workers_per_gather }}, parallel maintenance workers {{ srv.max_parallel_maintenance_workers }}</dd>
+    <dt>Client OS</dt><dd>{{ run.environment.os }}</dd>
+    <dt>CPU</dt><dd>{{ run.environment.processor or run.environment.machine }} · {{ run.environment.cpu_count }} logical CPUs</dd>
+    <dt>Python</dt><dd>{{ run.environment.python_version }} · psycopg {{ run.environment.psycopg_version }}</dd>
+    <dt>Tool</dt><dd>vsbench {{ run.tool_version }} · schema v{{ run.schema_version }}</dd>
+    <dt>Finished</dt><dd>{{ run.finished_at }}</dd>
+  </dl></div>
+</div>
+
+<h2>Query-plan verification</h2>
+<div class="card scroll"><table>
+  <thead><tr><th>Configuration</th><th>Plan nodes (EXPLAIN, first query)</th><th>Indexes scanned</th><th>Expected</th><th>Result</th></tr></thead>
+  <tbody>{% for r in run.results %}
+  <tr><td class="mono">{{ r.label }}</td><td class="mono">{{ r.plan_node_types | join(" → ") }}</td>
+    <td class="mono">{{ r.plan_indexes | join(", ") or "none" }}</td>
+    <td>{{ "sequential scan, no index" if r.method == "exact" else "HNSW index scan" }}</td>
+    <td>{% if r.plan_verified %}<span class="ok">✓</span>{% else %}<span class="bad">✗</span>{% endif %}</td></tr>
+  {% endfor %}</tbody>
+</table></div>
+
+<h2>Methodology</h2>
+<div class="card">
+<ol>
+  <li>Dataset: {{ run.dataset.source }}. Synthetic data is generated from a fixed seed and is bit-identical across runs; the SHA-256 of vectors + queries identifies the exact data used.</li>
+  <li>Vectors are bulk-loaded with <code>COPY</code>, then <code>VACUUM ANALYZE</code>. Load time is reported separately.</li>
+  <li><b>Exact baseline</b> runs before any vector index exists, with index and bitmap scans disabled, ordering by distance then <code>id</code> (ties go to the lowest id). Its results are the ground truth; the first {{ run.exact_crosscheck.queries_checked }} are cross-checked against NumPy brute force.</li>
+  <li><b>HNSW</b>: each index is built once (build time measured around <code>CREATE INDEX</code>), then every <code>ef_search</code> value is measured with sequential scans disabled so the planner uses the index even on small tables. The index is dropped before the next build.</li>
+  <li>Before each measured configuration: one <code>EXPLAIN</code> to verify the access path, then {{ cfg.warmup_queries }} untimed warm-up queries.</li>
+  <li>Each query is a prepared statement timed with <code>time.perf_counter_ns()</code> around execute + fetch. The full query set is replayed {{ cfg.trials }} times; all samples are pooled.</li>
+  <li>Server time: after the timed trials, <code>EXPLAIN (ANALYZE, TIMING OFF)</code> runs the first {{ server_n }} queries and the median reported execution time is recorded. It excludes network and client cost and is not mixed into client latency.</li>
+  <li>Percentiles use the nearest-rank method (the smallest sample with at least p% of samples ≤ it); median is p50 by the same rule.</li>
+  <li>Recall@k = |exact top-k ids ∩ HNSW top-k ids| / k per query, averaged over all queries (from the first trial; results are deterministic for a fixed index).</li>
+</ol>
+</div>
+
+<h2>Limitations</h2>
+<div class="card">
+<ul>
+  <li>One run on one machine. Numbers depend on hardware, Docker, PostgreSQL settings and background load; they do not generalise.</li>
+  <li>Client latency includes network round-trip and driver overhead; server time is a median over a sample of queries only.</li>
+  <li>Single connection, sequential queries — no concurrency is measured.</li>
+  {% if run.dataset.source.startswith("synthetic") %}<li>Synthetic vectors only approximate real embeddings; recall and latency on your own data can be higher or lower. Rerun with <code>vsbench run --vectors your.npy</code> to measure it.</li>{% endif %}
+  <li>Recall matches by id. When several vectors share the k-th distance, an HNSW result returning an equally close neighbour counts as a miss.</li>
+  <li>HNSW index builds are not deterministic (random level assignment, parallel build), so recall at low <code>ef_search</code> can vary slightly between runs on identical data.</li>
+  <li>Cache state is not controlled beyond warm-up; the dataset is assumed to fit in shared buffers / OS cache.</li>
+</ul>
+</div>
+</main>
+</body>
+</html>

@@ -1,0 +1,22 @@
+services:
+  db:
+    image: pgvector/pgvector:0.8.0-pg17
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-vsbench}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-vsbench}
+      POSTGRES_DB: ${POSTGRES_DB:-vsbench}
+    ports:
+      # localhost only: the database is never exposed on the network
+      - "127.0.0.1:${VSBENCH_DB_PORT:-5433}:5432"
+    # parallel HNSW builds use shared memory; Docker's 64 MB default is too small
+    shm_size: 1g
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 2s
+      timeout: 5s
+      retries: 30
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+
+volumes:
+  pgdata:
